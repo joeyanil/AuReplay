@@ -17,7 +17,7 @@ export async function dbSaveTrade(trade) {
     closed_at:   trade.closedAt,
     interval:    trade.interval,
   }])
-  if (error) console.warn('Supabase saveTrade error:', error.message)
+  if (error) console.warn('Supabase saveTrade:', error.message)
 }
 
 export async function dbSaveStats(stats, startingBalance) {
@@ -32,5 +32,5 @@ export async function dbSaveStats(stats, startingBalance) {
     starting_balance: startingBalance,
     updated_at:       new Date().toISOString(),
   }])
-  if (error) console.warn('Supabase saveStats error:', error.message)
+  if (error) console.warn('Supabase saveStats:', error.message)
 }
