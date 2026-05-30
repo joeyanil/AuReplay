@@ -1,68 +1,106 @@
-import React, { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallback } from 'react'
-import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
+import React, {
+  useEffect, useRef, useImperativeHandle,
+  forwardRef, useState, useCallback
+} from 'react'
+import { createChart, CrosshairMode } from 'lightweight-charts'
+import { FIB_LEVELS, COLORS } from '../constants.js'
 
-// ── helpers ────────────────────────────────────────────────────────────────────
+// ─── Price-anchor helpers ─────────────────────────────────────────────────────
+// Drawings store price values. We convert price→y on every render using the
+// chart's priceScale so drawings stay glued to the correct price level.
 
-function priceToY(price, priceScale, chartHeight) {
-  // priceScale is the chart's price scale API — we use coordinateForPrice
-  return priceScale ? priceScale.coordinateForPrice(price) : null
-}
-
-// ── Drawing overlay (SVG) ─────────────────────────────────────────────────────
-
-function DrawingOverlay({ drawings, activeTool, chartRef, onDrawingComplete, onDrawingsChange }) {
-  const svgRef = useRef(null)
-  const [inProgress, setInProgress] = useState(null) // { tool, points: [{x,y,price,time}] }
-  const [dragging, setDragging] = useState(null)      // { drawingIndex, pointIndex }
-
-  // Convert SVG-relative coords to chart price via the chart API
-  const coordsFromEvent = useCallback((e) => {
-    const svg = svgRef.current
-    if (!svg) return null
-    const rect = svg.getBoundingClientRect()
-    const touch = e.touches ? e.touches[0] : e
-    const x = touch.clientX - rect.left
-    const y = touch.clientY - rect.top
+function useChartCoords(chartRef) {
+  const toY = useCallback((price) => {
     const chart = chartRef.current?.chart
     if (!chart) return null
-    // Use lightweight-charts coordinate conversion
-    const price = chart.priceScale('right').coordinateToPrice(y)
-    // Approximate time from x — use the visible logical range
-    return { x, y, price }
+    try { return chart.priceScale('right').priceToCoordinate(price) }
+    catch { return null }
   }, [chartRef])
 
-  const handleStart = useCallback((e) => {
+  const toPrice = useCallback((y) => {
+    const chart = chartRef.current?.chart
+    if (!chart) return null
+    try { return chart.priceScale('right').coordinateToPrice(y) }
+    catch { return null }
+  }, [chartRef])
+
+  const toX = useCallback((svgRect) => {
+    // We don't need time→x for the drawing types we have;
+    // drawings are placed by tapping and stored with price only.
+    return null
+  }, [])
+
+  return { toY, toPrice }
+}
+
+// ─── SVG Drawing Overlay ──────────────────────────────────────────────────────
+function DrawingOverlay({ drawings, activeTool, chartRef, onDrawingComplete, onDrawingsChange }) {
+  const svgRef  = useRef(null)
+  const [inProgress, setInProgress] = useState(null)
+  const [selected,   setSelected]   = useState(null) // index of selected drawing
+  const [dragState,  setDragState]  = useState(null) // { drawingIndex, pointIndex, startY, startPrice }
+  const { toY, toPrice } = useChartCoords(chartRef)
+  const [, forceUpdate] = useState(0)
+
+  // Re-render overlay whenever chart scrolls/zooms (price→y changes)
+  useEffect(() => {
+    const chart = chartRef.current?.chart
+    if (!chart) return
+    const unsub1 = chart.timeScale().subscribeVisibleTimeRangeChange(() => forceUpdate(n => n + 1))
+    const unsub2 = chart.priceScale('right').applyOptions // watch resize via ResizeObserver on container
+    return () => { try { unsub1() } catch {} }
+  }, [chartRef])
+
+  // ── Event helpers ───────────────────────────────────────────────────────────
+  const getEventCoords = useCallback((e) => {
+    const svg  = svgRef.current
+    if (!svg) return null
+    const rect  = svg.getBoundingClientRect()
+    const touch = e.touches?.[0] ?? e
+    const x = touch.clientX - rect.left
+    const y = touch.clientY - rect.top
+    const price = toPrice(y)
+    return { x, y, price }
+  }, [toPrice])
+
+  // ── Touch/mouse handlers ────────────────────────────────────────────────────
+  const onStart = useCallback((e) => {
     if (!activeTool || activeTool === 'none') return
     e.preventDefault()
-    const coords = coordsFromEvent(e)
-    if (!coords) return
+    const coords = getEventCoords(e)
+    if (!coords || coords.price == null) return
 
-    // Check if tapping near an existing drawing point for dragging
+    // Check tap on existing drawing point → drag
     for (let di = 0; di < drawings.length; di++) {
-      const d = drawings[di]
-      for (let pi = 0; pi < d.points.length; pi++) {
-        const p = d.points[pi]
-        if (Math.hypot(p.x - coords.x, p.y - coords.y) < 18) {
-          setDragging({ drawingIndex: di, pointIndex: pi })
+      for (let pi = 0; pi < drawings[di].points.length; pi++) {
+        const p   = drawings[di].points[pi]
+        const py  = toY(p.price)
+        if (py == null) continue
+        const px  = p.x ?? coords.x
+        if (Math.hypot(px - coords.x, py - coords.y) < 20) {
+          setDragState({ drawingIndex: di, pointIndex: pi })
+          setSelected(di)
           return
         }
       }
     }
 
-    // Start a new drawing
-    setInProgress({ tool: activeTool, points: [coords] })
-  }, [activeTool, coordsFromEvent, drawings])
+    setSelected(null)
+    setInProgress({ tool: activeTool, points: [{ x: coords.x, price: coords.price }] })
+  }, [activeTool, drawings, getEventCoords, toY])
 
-  const handleMove = useCallback((e) => {
+  const onMove = useCallback((e) => {
     e.preventDefault()
-    const coords = coordsFromEvent(e)
-    if (!coords) return
+    const coords = getEventCoords(e)
+    if (!coords || coords.price == null) return
 
-    if (dragging !== null) {
+    if (dragState) {
       const updated = drawings.map((d, di) => {
-        if (di !== dragging.drawingIndex) return d
+        if (di !== dragState.drawingIndex) return d
         const pts = d.points.map((p, pi) =>
-          pi === dragging.pointIndex ? coords : p
+          pi === dragState.pointIndex
+            ? { ...p, price: coords.price, x: coords.x }
+            : p
         )
         return { ...d, points: pts }
       })
@@ -71,289 +109,378 @@ function DrawingOverlay({ drawings, activeTool, chartRef, onDrawingComplete, onD
     }
 
     if (inProgress) {
-      setInProgress(prev => ({ ...prev, preview: coords }))
+      setInProgress(prev => ({ ...prev, preview: { x: coords.x, price: coords.price } }))
     }
-  }, [dragging, inProgress, coordsFromEvent, drawings, onDrawingsChange])
+  }, [dragState, inProgress, drawings, getEventCoords, onDrawingsChange])
 
-  const handleEnd = useCallback((e) => {
+  const onEnd = useCallback((e) => {
     e.preventDefault()
-    if (dragging !== null) {
-      setDragging(null)
-      return
-    }
+    if (dragState) { setDragState(null); return }
     if (!inProgress) return
 
-    const tool = inProgress.tool
-    const points = inProgress.points
+    const { tool, points, preview } = inProgress
 
-    // Single-point tools: horizontal line
     if (tool === 'horizontal') {
       onDrawingComplete({ tool, points })
       setInProgress(null)
       return
     }
 
-    // Two-point tools: need second tap
-    if (points.length === 1 && inProgress.preview) {
-      const second = inProgress.preview
-      onDrawingComplete({ tool, points: [points[0], second] })
+    // Two-point tools: first tap sets p1, second tap (via preview) sets p2
+    if (points.length === 1 && preview) {
+      onDrawingComplete({ tool, points: [points[0], preview] })
       setInProgress(null)
     }
-  }, [dragging, inProgress, onDrawingComplete])
+  }, [dragState, inProgress, onDrawingComplete])
 
-  // Render each drawing as SVG elements
+  // ── Delete selected drawing ─────────────────────────────────────────────────
+  const deleteSelected = useCallback(() => {
+    if (selected == null) return
+    onDrawingsChange(drawings.filter((_, i) => i !== selected))
+    setSelected(null)
+  }, [selected, drawings, onDrawingsChange])
+
+  // ── Render helpers ──────────────────────────────────────────────────────────
+  const W = 9999 // SVG is wide; lines extend edge to edge
+
   const renderDrawing = (d, i) => {
-    const { tool, points } = d
-    const color = d.color || '#F0B90B'
-    const strokeW = 1.5
+    const isSelected = selected === i
+    const color = isSelected ? COLORS.gold : (d.color || '#7B8CB8')
+    const sw = isSelected ? 2 : 1.5
 
-    if (tool === 'horizontal' && points[0]) {
-      const y = points[0].y
-      return (
-        <g key={i}>
-          <line x1={0} y1={y} x2={10000} y2={y} stroke={color} strokeWidth={strokeW} strokeDasharray="4 3" />
-          <text x={6} y={y - 4} fill={color} fontSize={10}>{points[0].price?.toFixed(2)}</text>
-          <circle cx={points[0].x} cy={y} r={6} fill={color} fillOpacity={0.3} />
-        </g>
-      )
-    }
+    const [p1, p2] = d.points
+    const y1 = toY(p1?.price)
+    const y2 = p2 ? toY(p2.price) : null
 
-    if ((tool === 'trendline' || tool === 'pricerange' || tool === 'rectangle' || tool === 'fib') && points.length >= 2) {
-      const [p1, p2] = points
+    if (y1 == null) return null
 
-      if (tool === 'trendline') {
+    switch (d.tool) {
+      case 'horizontal': {
         return (
-          <g key={i}>
-            <line x1={0} y1={p1.y + (0 - p1.x) * (p2.y - p1.y) / (p2.x - p1.x)}
-                  x2={10000} y2={p1.y + (10000 - p1.x) * (p2.y - p1.y) / (p2.x - p1.x)}
-                  stroke={color} strokeWidth={strokeW} />
-            <circle cx={p1.x} cy={p1.y} r={5} fill={color} fillOpacity={0.4} />
-            <circle cx={p2.x} cy={p2.y} r={5} fill={color} fillOpacity={0.4} />
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            <line x1={0} y1={y1} x2={W} y2={y1} stroke={color} strokeWidth={sw} strokeDasharray="5 3" />
+            <text x={6} y={y1 - 4} fill={color} fontSize={10} fontFamily="monospace">
+              {p1.price?.toFixed(2)}
+            </text>
+            <circle cx={p1.x ?? 60} cy={y1} r={7} fill={color} fillOpacity={0.25} />
           </g>
         )
       }
 
-      if (tool === 'pricerange') {
-        const dist = Math.abs((p2.price || 0) - (p1.price || 0))
-        const midY = (p1.y + p2.y) / 2
+      case 'trendline': {
+        if (y2 == null) return null
+        const dx = (p2.x ?? 200) - (p1.x ?? 60)
+        const dy = y2 - y1
+        const slope = dx !== 0 ? dy / dx : 0
+        const leftY  = y1 - (p1.x ?? 60) * slope
+        const rightY = y1 + (W - (p1.x ?? 60)) * slope
         return (
-          <g key={i}>
-            <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p1.y} stroke={color} strokeWidth={strokeW} />
-            <line x1={p1.x} y1={p2.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth={strokeW} />
-            <line x1={(p1.x + p2.x) / 2} y1={p1.y} x2={(p1.x + p2.x) / 2} y2={p2.y} stroke={color} strokeWidth={strokeW} strokeDasharray="3 3" />
-            <rect x={p1.x} y={Math.min(p1.y, p2.y)} width={Math.abs(p2.x - p1.x)} height={Math.abs(p2.y - p1.y)} fill={color} fillOpacity={0.07} />
-            <text x={(p1.x + p2.x) / 2 + 4} y={midY} fill={color} fontSize={10}>{dist.toFixed(2)} pts</text>
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            <line x1={0} y1={leftY} x2={W} y2={rightY} stroke={color} strokeWidth={sw} />
+            <circle cx={p1.x ?? 60} cy={y1} r={6} fill={color} fillOpacity={0.3} />
+            <circle cx={p2.x ?? 200} cy={y2} r={6} fill={color} fillOpacity={0.3} />
           </g>
         )
       }
 
-      if (tool === 'rectangle') {
-        const x = Math.min(p1.x, p2.x)
-        const y = Math.min(p1.y, p2.y)
-        const w = Math.abs(p2.x - p1.x)
-        const h = Math.abs(p2.y - p1.y)
+      case 'pricerange': {
+        if (y2 == null) return null
+        const dist = Math.abs(p2.price - p1.price)
+        const top  = Math.min(y1, y2)
+        const bot  = Math.max(y1, y2)
+        const midY = (y1 + y2) / 2
+        const midX = ((p1.x ?? 60) + (p2.x ?? 200)) / 2
         return (
-          <g key={i}>
-            <rect x={x} y={y} width={w} height={h} stroke={color} strokeWidth={strokeW} fill={color} fillOpacity={0.08} />
-            <circle cx={p1.x} cy={p1.y} r={5} fill={color} fillOpacity={0.4} />
-            <circle cx={p2.x} cy={p2.y} r={5} fill={color} fillOpacity={0.4} />
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            <rect x={Math.min(p1.x ?? 60, p2.x ?? 200)} y={top}
+                  width={Math.abs((p2.x ?? 200) - (p1.x ?? 60))} height={bot - top}
+                  fill={color} fillOpacity={0.08} />
+            <line x1={p1.x ?? 60} y1={y1} x2={p2.x ?? 200} y2={y1} stroke={color} strokeWidth={sw} />
+            <line x1={p1.x ?? 60} y1={y2} x2={p2.x ?? 200} y2={y2} stroke={color} strokeWidth={sw} />
+            <line x1={midX} y1={y1} x2={midX} y2={y2} stroke={color} strokeWidth={1} strokeDasharray="3 3" />
+            <text x={midX + 4} y={midY + 4} fill={color} fontSize={10} fontFamily="monospace">
+              {dist.toFixed(2)}
+            </text>
           </g>
         )
       }
 
-      if (tool === 'fib') {
-        const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
-        const labels = ['0%', '23.6%', '38.2%', '50%', '61.8%', '78.6%', '100%']
-        const colors = ['#999', '#4CAF50', '#2196F3', '#FF9800', '#E91E63', '#9C27B0', '#999']
-        const priceDiff = (p2.price || 0) - (p1.price || 0)
-        const yDiff = p2.y - p1.y
+      case 'rectangle': {
+        if (y2 == null) return null
+        const rx = Math.min(p1.x ?? 60, p2.x ?? 200)
+        const ry = Math.min(y1, y2)
+        const rw = Math.abs((p2.x ?? 200) - (p1.x ?? 60))
+        const rh = Math.abs(y2 - y1)
         return (
-          <g key={i}>
-            {levels.map((lvl, li) => {
-              const ly = p1.y + yDiff * lvl
-              const lp = (p1.price || 0) + priceDiff * lvl
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            <rect x={rx} y={ry} width={rw} height={rh}
+                  stroke={color} strokeWidth={sw} fill={color} fillOpacity={0.07} />
+            <circle cx={p1.x ?? 60} cy={y1} r={5} fill={color} fillOpacity={0.4} />
+            <circle cx={p2.x ?? 200} cy={y2} r={5} fill={color} fillOpacity={0.4} />
+          </g>
+        )
+      }
+
+      case 'fib': {
+        if (y2 == null) return null
+        const priceDiff = p2.price - p1.price
+        const yDiff = y2 - y1
+        return (
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            {FIB_LEVELS.map((lvl, li) => {
+              const ly = y1 + yDiff * lvl.ratio
+              const lp = p1.price + priceDiff * lvl.ratio
               return (
                 <g key={li}>
-                  <line x1={0} y1={ly} x2={10000} y2={ly} stroke={colors[li]} strokeWidth={1} strokeOpacity={0.7} strokeDasharray="5 3" />
-                  <text x={p1.x + 4} y={ly - 3} fill={colors[li]} fontSize={9}>{labels[li]} — {lp.toFixed(2)}</text>
+                  <line x1={0} y1={ly} x2={W} y2={ly}
+                        stroke={lvl.color} strokeWidth={1} strokeOpacity={0.75} strokeDasharray="6 3" />
+                  <text x={(p1.x ?? 60) + 4} y={ly - 3} fill={lvl.color} fontSize={9} fontFamily="monospace">
+                    {lvl.label} {lp.toFixed(2)}
+                  </text>
                 </g>
               )
             })}
           </g>
         )
       }
-    }
 
-    if ((tool === 'long' || tool === 'short') && points.length >= 2) {
-      const [entry, tp] = points
-      const slY = entry.y + (entry.y - tp.y) // mirror SL on other side of entry
-      const slPrice = entry.price - (tp.price - entry.price)
-      const rr = tp.price && entry.price && slPrice
-        ? Math.abs((tp.price - entry.price) / (entry.price - slPrice))
-        : null
+      case 'long':
+      case 'short': {
+        if (y2 == null) return null
+        const isLong   = d.tool === 'long'
+        const entry    = p1.price
+        const tp       = p2.price
+        const slPrice  = entry - (tp - entry)
+        const slY      = toY(slPrice)
+        const tpColor  = isLong ? COLORS.green : COLORS.red
+        const slColor  = isLong ? COLORS.red   : COLORS.green
+        const rr       = Math.abs((tp - entry) / (entry - slPrice))
 
-      const isLong = tool === 'long'
-      const tpColor = isLong ? '#26a69a' : '#ef5350'
-      const slColor = isLong ? '#ef5350' : '#26a69a'
+        const tpTop = Math.min(y1, y2)
+        const tpH   = Math.abs(y2 - y1)
+        const slTop = slY != null ? Math.min(y1, slY) : y1
+        const slH   = slY != null ? Math.abs(slY - y1) : 0
 
-      const tpTop = Math.min(entry.y, tp.y)
-      const tpH = Math.abs(entry.y - tp.y)
-      const slTop = entry.y
-      const slH = Math.abs(slY - entry.y)
-
-      return (
-        <g key={i}>
-          {/* TP zone */}
-          <rect x={0} y={tpTop} width={10000} height={tpH} fill={tpColor} fillOpacity={0.15} />
-          <line x1={0} y1={tp.y} x2={10000} y2={tp.y} stroke={tpColor} strokeWidth={1.5} />
-          <text x={8} y={tp.y - 4} fill={tpColor} fontSize={10}>TP {tp.price?.toFixed(2)}</text>
-
-          {/* Entry line */}
-          <line x1={0} y1={entry.y} x2={10000} y2={entry.y} stroke="#ffffff" strokeWidth={2} />
-          <text x={8} y={entry.y - 4} fill="#ffffff" fontSize={10}>Entry {entry.price?.toFixed(2)}</text>
-
-          {/* SL zone */}
-          <rect x={0} y={slTop} width={10000} height={slH} fill={slColor} fillOpacity={0.15} />
-          <line x1={0} y1={slY} x2={10000} y2={slY} stroke={slColor} strokeWidth={1.5} />
-          <text x={8} y={slY + 12} fill={slColor} fontSize={10}>SL {slPrice?.toFixed(2)}</text>
-
-          {rr && (
-            <text x={8} y={entry.y + (isLong ? tpH / 2 : -tpH / 2)} fill="#ffffff" fontSize={11} fontWeight="bold">
-              RR {rr.toFixed(2)}
+        return (
+          <g key={i} onClick={() => setSelected(i)} style={{ cursor: 'pointer' }}>
+            <rect x={0} y={tpTop} width={W} height={tpH} fill={tpColor} fillOpacity={0.12} />
+            <line x1={0} y1={y2} x2={W} y2={y2} stroke={tpColor} strokeWidth={1.5} />
+            <text x={8} y={y2 - 4} fill={tpColor} fontSize={10} fontFamily="monospace">
+              TP {tp.toFixed(2)}
             </text>
-          )}
 
-          <circle cx={entry.x} cy={entry.y} r={6} fill="#ffffff" fillOpacity={0.4} />
-          <circle cx={tp.x} cy={tp.y} r={6} fill={tpColor} fillOpacity={0.5} />
-        </g>
-      )
+            <line x1={0} y1={y1} x2={W} y2={y1} stroke="#ffffff" strokeWidth={2} />
+            <text x={8} y={y1 - 4} fill="#ffffff" fontSize={10} fontFamily="monospace">
+              Entry {entry.toFixed(2)}
+            </text>
+
+            {slY != null && (
+              <>
+                <rect x={0} y={slTop} width={W} height={slH} fill={slColor} fillOpacity={0.12} />
+                <line x1={0} y1={slY} x2={W} y2={slY} stroke={slColor} strokeWidth={1.5} />
+                <text x={8} y={slY + 12} fill={slColor} fontSize={10} fontFamily="monospace">
+                  SL {slPrice.toFixed(2)}
+                </text>
+              </>
+            )}
+
+            <text x={8} y={y1 + (isLong ? -tpH / 2 : tpH / 2)} fill="#ffffff" fontSize={11} fontWeight="bold">
+              RR {isFinite(rr) ? rr.toFixed(2) : '—'}
+            </text>
+          </g>
+        )
+      }
+
+      default: return null
     }
-
-    return null
   }
 
-  // Render in-progress preview line
   const renderPreview = () => {
-    if (!inProgress || !inProgress.preview) return null
+    if (!inProgress?.preview) return null
     const p1 = inProgress.points[0]
     const p2 = inProgress.preview
-    const tool = inProgress.tool
-    const color = '#F0B90B'
-
-    if (tool === 'horizontal') {
-      return <line x1={0} y1={p1.y} x2={10000} y2={p1.y} stroke={color} strokeWidth={1.5} strokeDasharray="4 3" strokeOpacity={0.6} />
-    }
-    if (tool === 'trendline') {
-      return <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth={1.5} strokeOpacity={0.6} />
-    }
-    if (tool === 'rectangle') {
-      const x = Math.min(p1.x, p2.x), y = Math.min(p1.y, p2.y)
-      const w = Math.abs(p2.x - p1.x), h = Math.abs(p2.y - p1.y)
-      return <rect x={x} y={y} width={w} height={h} stroke={color} strokeWidth={1.5} fill={color} fillOpacity={0.06} strokeOpacity={0.6} />
-    }
-    return <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={color} strokeWidth={1.5} strokeOpacity={0.6} strokeDasharray="5 3" />
+    const y1 = toY(p1.price)
+    const y2 = toY(p2.price)
+    if (y1 == null) return null
+    return (
+      <g opacity={0.5}>
+        <line x1={p1.x} y1={y1} x2={p2.x} y2={y2 ?? y1}
+              stroke={COLORS.gold} strokeWidth={1.5} strokeDasharray="5 3" />
+      </g>
+    )
   }
 
+  const isDrawing = activeTool && activeTool !== 'none'
+
   return (
-    <svg
-      ref={svgRef}
-      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 10, cursor: activeTool && activeTool !== 'none' ? 'crosshair' : 'default', touchAction: 'none', pointerEvents: activeTool && activeTool !== 'none' ? 'all' : 'none' }}
-      onMouseDown={handleStart}
-      onMouseMove={handleMove}
-      onMouseUp={handleEnd}
-      onTouchStart={handleStart}
-      onTouchMove={handleMove}
-      onTouchEnd={handleEnd}
-    >
-      {drawings.map(renderDrawing)}
-      {renderPreview()}
-    </svg>
+    <>
+      {/* Delete button when a drawing is selected */}
+      {selected != null && (
+        <button
+          onClick={deleteSelected}
+          style={{
+            position: 'absolute', top: 8, right: 8, zIndex: 30,
+            background: COLORS.red, color: '#fff', border: 'none',
+            borderRadius: 5, padding: '6px 12px', fontSize: 13,
+            fontWeight: 700, cursor: 'pointer',
+          }}
+        >
+          Delete
+        </button>
+      )}
+
+      <svg
+        ref={svgRef}
+        style={{
+          position: 'absolute', top: 0, left: 0,
+          width: '100%', height: '100%',
+          zIndex: 10,
+          cursor: isDrawing ? 'crosshair' : 'default',
+          touchAction: 'none',
+          pointerEvents: isDrawing || selected != null ? 'all' : 'none',
+          overflow: 'visible',
+        }}
+        onMouseDown={onStart}
+        onMouseMove={onMove}
+        onMouseUp={onEnd}
+        onTouchStart={onStart}
+        onTouchMove={onMove}
+        onTouchEnd={onEnd}
+      >
+        {drawings.map((d, i) => renderDrawing(d, i))}
+        {renderPreview()}
+      </svg>
+    </>
   )
 }
 
-// ── Main Chart component ───────────────────────────────────────────────────────
-
-const Chart = forwardRef(function Chart({ candles, visibleIndex, activeTool, drawings, onDrawingComplete, onDrawingsChange }, ref) {
+// ─── Main Chart ───────────────────────────────────────────────────────────────
+const Chart = forwardRef(function Chart(
+  { candles, visibleIndex, openPositions, activeTool, drawings, onDrawingComplete, onDrawingsChange },
+  ref
+) {
   const containerRef = useRef(null)
-  const chartInstanceRef = useRef(null)
-  const seriesRef = useRef(null)
+  const chartRef     = useRef(null)
+  const seriesRef    = useRef(null)
 
-  // Expose chart ref to parent
   useImperativeHandle(ref, () => ({
-    get chart() { return chartInstanceRef.current },
+    get chart()  { return chartRef.current },
     get series() { return seriesRef.current },
   }))
 
-  // Init chart once
+  // ── Init chart once ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return
 
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { color: '#131722' },
-        textColor: '#d1d4dc',
+        background: { color: COLORS.bg },
+        textColor:  COLORS.text,
       },
       grid: {
-        vertLines: { color: '#1e2130' },
-        horzLines: { color: '#1e2130' },
+        vertLines: { color: '#1a1e2e' },
+        horzLines: { color: '#1a1e2e' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: '#758696', labelBackgroundColor: '#131722' },
-        horzLine: { color: '#758696', labelBackgroundColor: '#131722' },
+        vertLine: { color: '#758696', labelBackgroundColor: COLORS.panel },
+        horzLine: { color: '#758696', labelBackgroundColor: COLORS.panel },
       },
       rightPriceScale: {
-        borderColor: '#2a2e39',
-        scaleMargins: { top: 0.1, bottom: 0.1 },
+        borderColor: COLORS.border,
+        scaleMargins: { top: 0.08, bottom: 0.08 },
       },
       timeScale: {
-        borderColor: '#2a2e39',
+        borderColor: COLORS.border,
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 8,
       },
-      width: containerRef.current.clientWidth,
+      width:  containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
     })
 
     const series = chart.addCandlestickSeries({
-      upColor: '#26a69a',
-      downColor: '#ef5350',
-      borderUpColor: '#26a69a',
-      borderDownColor: '#ef5350',
-      wickUpColor: '#26a69a',
-      wickDownColor: '#ef5350',
+      upColor:        COLORS.green,
+      downColor:      COLORS.red,
+      borderUpColor:  COLORS.green,
+      borderDownColor:COLORS.red,
+      wickUpColor:    COLORS.green,
+      wickDownColor:  COLORS.red,
     })
 
-    chartInstanceRef.current = chart
+    chartRef.current  = chart
     seriesRef.current = series
 
-    // Resize observer
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({
-          width: containerRef.current.clientWidth,
+          width:  containerRef.current.clientWidth,
           height: containerRef.current.clientHeight,
         })
       }
     })
     ro.observe(containerRef.current)
 
-    return () => {
-      ro.disconnect()
-      chart.remove()
-    }
+    return () => { ro.disconnect(); chart.remove() }
   }, [])
 
-  // Update candle data when visibleIndex changes
+  // ── Update candles when visibleIndex changes ────────────────────────────────
   useEffect(() => {
     if (!seriesRef.current || !candles.length) return
-    const visible = candles.slice(0, visibleIndex + 1)
-    seriesRef.current.setData(visible)
-    // Scroll to latest candle
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.timeScale().scrollToPosition(5, false)
-    }
+    seriesRef.current.setData(candles.slice(0, visibleIndex + 1))
+    // Keep latest candle in view, but don't jump if user has scrolled back
+    chartRef.current?.timeScale().scrollToRealTime()
   }, [candles, visibleIndex])
+
+  // ── Draw TP/SL lines for open positions ─────────────────────────────────────
+  // We use priceLine API from Lightweight Charts for clean price lines
+  const priceLineRefs = useRef([])
+  useEffect(() => {
+    if (!seriesRef.current) return
+    // Remove old lines
+    priceLineRefs.current.forEach(pl => {
+      try { seriesRef.current.removePriceLine(pl) } catch (e) { /* line already removed */ }
+    })
+    priceLineRefs.current = []
+
+    // Add lines for each open position
+    openPositions.forEach(pos => {
+      const entryLine = seriesRef.current.createPriceLine({
+        price: pos.entryPrice,
+        color: '#ffffff',
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        axisLabelVisible: true,
+        title: `${pos.direction.toUpperCase()} entry`,
+      })
+      priceLineRefs.current.push(entryLine)
+
+      if (pos.tp != null) {
+        const tpLine = seriesRef.current.createPriceLine({
+          price: pos.tp,
+          color: pos.direction === 'long' ? COLORS.green : COLORS.red,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: 'TP',
+        })
+        priceLineRefs.current.push(tpLine)
+      }
+
+      if (pos.sl != null) {
+        const slLine = seriesRef.current.createPriceLine({
+          price: pos.sl,
+          color: pos.direction === 'long' ? COLORS.red : COLORS.green,
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: 'SL',
+        })
+        priceLineRefs.current.push(slLine)
+      }
+    })
+  }, [openPositions])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -361,7 +488,7 @@ const Chart = forwardRef(function Chart({ candles, visibleIndex, activeTool, dra
       <DrawingOverlay
         drawings={drawings}
         activeTool={activeTool}
-        chartRef={{ current: { chart: chartInstanceRef.current } }}
+        chartRef={{ current: { chart: chartRef.current } }}
         onDrawingComplete={onDrawingComplete}
         onDrawingsChange={onDrawingsChange}
       />

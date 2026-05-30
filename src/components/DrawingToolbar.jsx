@@ -1,41 +1,31 @@
 import React from 'react'
-
-const TOOLS = [
-  { id: 'none',       label: '✦',   title: 'Pointer (no tool)' },
-  { id: 'horizontal', label: '—',   title: 'Horizontal Line' },
-  { id: 'trendline',  label: '↗',   title: 'Trendline' },
-  { id: 'pricerange', label: '↕',   title: 'Price Range' },
-  { id: 'rectangle',  label: '▭',   title: 'Rectangle' },
-  { id: 'fib',        label: 'F',   title: 'Fibonacci Retracement' },
-  { id: 'long',       label: '▲L',  title: 'Long Position' },
-  { id: 'short',      label: '▼S',  title: 'Short Position' },
-]
+import { DRAWING_TOOLS, COLORS } from '../constants.js'
 
 export default function DrawingToolbar({ activeTool, onToolChange, onClearAll }) {
   return (
-    <div style={styles.wrap}>
-      {TOOLS.map(t => (
+    <div style={s.wrap}>
+      {DRAWING_TOOLS.map(tool => (
         <button
-          key={t.id}
-          title={t.title}
-          onClick={() => onToolChange(t.id)}
+          key={tool.id}
+          title={tool.title}
+          onClick={() => onToolChange(tool.id === activeTool ? 'none' : tool.id)}
           style={{
-            ...styles.btn,
-            ...(activeTool === t.id ? styles.active : {}),
-            ...(t.id === 'long' ? styles.longBtn : {}),
-            ...(t.id === 'short' ? styles.shortBtn : {}),
+            ...s.btn,
+            ...(activeTool === tool.id && tool.id !== 'none' ? s.active : {}),
+            ...(tool.id === 'long'  ? s.longColor  : {}),
+            ...(tool.id === 'short' ? s.shortColor : {}),
           }}
         >
-          {t.label}
+          {tool.label}
         </button>
       ))}
 
-      <div style={styles.spacer} />
+      <div style={s.spacer} />
 
       <button
         title="Clear all drawings"
         onClick={onClearAll}
-        style={{ ...styles.btn, ...styles.clearBtn }}
+        style={{ ...s.btn, ...s.clearBtn }}
       >
         ✕
       </button>
@@ -43,48 +33,50 @@ export default function DrawingToolbar({ activeTool, onToolChange, onClearAll })
   )
 }
 
-const styles = {
+const s = {
   wrap: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     gap: 4,
-    background: '#1e222d',
-    borderRight: '1px solid #2a2e39',
-    padding: '8px 6px',
-    width: 48,
-    minWidth: 48,
+    background: COLORS.panel,
+    borderRight: `1px solid ${COLORS.border}`,
+    padding: '8px 5px',
+    width: 44,
+    minWidth: 44,
+    flexShrink: 0,
   },
   btn: {
-    background: '#2a2e39',
-    color: '#d1d4dc',
-    border: '1px solid #363a45',
-    borderRadius: 6,
-    width: 36,
-    height: 36,
+    background: COLORS.input,
+    color: COLORS.text,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 5,
+    width: 34,
+    height: 34,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 700,
     flexShrink: 0,
     userSelect: 'none',
+    padding: 0,
   },
   active: {
-    background: '#363a45',
-    color: '#F0B90B',
-    borderColor: '#F0B90B',
+    background: COLORS.highlight,
+    color: COLORS.gold,
+    borderColor: COLORS.gold,
   },
-  longBtn: {
-    color: '#26a69a',
+  longColor: {
+    color: COLORS.green,
   },
-  shortBtn: {
-    color: '#ef5350',
+  shortColor: {
+    color: COLORS.red,
   },
   clearBtn: {
-    color: '#ef5350',
-    borderColor: '#ef5350',
+    color: COLORS.red,
+    borderColor: COLORS.red,
     background: 'transparent',
   },
   spacer: {
