@@ -31,15 +31,13 @@ input, select {
 
 input:focus, select:focus {
   border-color: #F0B90B !important;
-  box-shadow: 0 0 0 1px #F0B90B22;
+  box-shadow: 0 0 0 1px rgba(240,185,11,0.15);
 }
 
-/* Thin dark scrollbar */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: #131722; }
 ::-webkit-scrollbar-thumb { background: #363a45; border-radius: 2px; }
 
-/* Remove number spinners */
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
 input[type=number] { -moz-appearance: textfield; }
