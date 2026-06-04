@@ -24,25 +24,24 @@ export default function App() {
   const currentCandle = session.candles[session.visibleIndex] ?? null
   const currentPrice  = currentCandle?.close ?? null
 
-  // ── Drawing handlers ────────────────────────────────────────────────────────
+  // Drawing
   const handleDrawingComplete = useCallback((drawing) => {
     session.setDrawings(prev => [...prev, drawing])
-    // Keep tool active for rapid drawing (like TradingView)
-    // Only deactivate pointer tool
+    // Keep tool active — same as TradingView (tap again to deactivate)
   }, [session])
 
   const handleUndo = useCallback(() => {
     session.setDrawings(prev => prev.slice(0, -1))
   }, [session])
 
-  // ── Reset session ───────────────────────────────────────────────────────────
+  // Reset
   const handleReset = useCallback(() => {
     if (window.confirm('Reset session? This wipes all trades and resets your balance.')) {
       session.resetSession()
     }
   }, [session])
 
-  // ── Interval switch ─────────────────────────────────────────────────────────
+  // TF switch
   const handleIntervalChange = useCallback((newInterval) => {
     replay.switchInterval(newInterval)
   }, [replay])
@@ -50,7 +49,6 @@ export default function App() {
   return (
     <div style={s.root}>
 
-      {/* Top toolbar */}
       <Toolbar
         interval={session.interval}
         onIntervalChange={handleIntervalChange}
@@ -58,6 +56,7 @@ export default function App() {
         onStartDateChange={session.setStartDate}
         onLoad={replay.load}
         loading={replay.loading}
+        fetching={replay.fetching}
         isPlaying={replay.isPlaying}
         onPlay={replay.play}
         onPause={replay.pause}
@@ -69,7 +68,10 @@ export default function App() {
         onSpeedChange={replay.setSpeed}
         visibleIndex={session.visibleIndex}
         totalCandles={session.candles.length}
-        ohlc={ohlc || (currentCandle ? { open: currentCandle.open, high: currentCandle.high, low: currentCandle.low, close: currentCandle.close } : null)}
+        replayStartIndex={session.replayStartIndex}
+        ohlc={ohlc ?? (currentCandle
+          ? { open: currentCandle.open, high: currentCandle.high, low: currentCandle.low, close: currentCandle.close }
+          : null)}
         currentPrice={currentPrice}
       />
 
@@ -104,8 +106,8 @@ export default function App() {
           {!replay.loading && !session.candles.length && (
             <div style={s.overlay}>
               <div style={s.overlayText}>
-                {'Pick a timeframe and date,\nthen tap '}
-                <strong style={{ color: '#F0B90B' }}>Load</strong>
+                Pick a timeframe and date above,{'\n'}then tap{' '}
+                <strong style={{ color: '#f0b90b' }}>Load</strong>
               </div>
             </div>
           )}
@@ -117,7 +119,6 @@ export default function App() {
             replayStartIndex={session.replayStartIndex}
             openPositions={session.openPositions}
             closedTrades={session.closedTrades}
-            partialCandle={replay.partialCandle}
             activeTool={activeTool}
             drawings={session.drawings}
             onDrawingComplete={handleDrawingComplete}
@@ -127,12 +128,11 @@ export default function App() {
             onOHLCHover={setOhlc}
           />
 
-          {/* Toast notifications */}
           <Notifications notifications={trades.notifications} />
         </div>
       </div>
 
-      {/* Bottom drawers — stats below, account above (account on top) */}
+      {/* Bottom drawers */}
       <div style={s.drawers}>
         <StatsDrawer
           open={statsOpen && !accountOpen}
@@ -151,7 +151,7 @@ export default function App() {
           currentPrice={currentPrice}
           currentCandle={currentCandle}
           getUnrealisedPnl={trades.getUnrealisedPnl}
-          onBuy={(size, tp, sl) => trades.openTrade('long',  size, tp, sl)}
+          onBuy={(size, tp, sl)  => trades.openTrade('long',  size, tp, sl)}
           onSell={(size, tp, sl) => trades.openTrade('short', size, tp, sl)}
           onClosePosition={trades.closeTrade}
           onResetSession={handleReset}
@@ -163,65 +163,28 @@ export default function App() {
 
 const s = {
   root: {
-    display:       'flex',
-    flexDirection: 'column',
-    height:        '100dvh',
-    width:         '100vw',
-    background:    '#131722',
-    color:         '#d1d4dc',
-    fontFamily:    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    overflow:      'hidden',
-    userSelect:    'none',
+    display: 'flex', flexDirection: 'column',
+    height: '100dvh', width: '100vw',
+    background: '#131722', color: '#d1d4dc',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    overflow: 'hidden', userSelect: 'none',
   },
-  main: {
-    display:    'flex',
-    flex:       1,
-    overflow:   'hidden',
-    minHeight:  0,
-  },
-  chartWrap: {
-    flex:       1,
-    position:   'relative',
-    overflow:   'hidden',
-  },
-  drawers: {
-    display:       'flex',
-    flexDirection: 'column-reverse',
-    flexShrink:    0,
-  },
+  main: { display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 },
+  chartWrap: { flex: 1, position: 'relative', overflow: 'hidden' },
+  drawers: { display: 'flex', flexDirection: 'column-reverse', flexShrink: 0 },
   overlay: {
-    position:       'absolute',
-    inset:          0,
-    display:        'flex',
-    alignItems:     'center',
-    justifyContent: 'center',
-    background:     'rgba(19,23,34,0.82)',
-    zIndex:         20,
+    position: 'absolute', inset: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(19,23,34,0.82)', zIndex: 20,
   },
   overlayText: {
-    fontSize:   14,
-    color:      '#758696',
-    textAlign:  'center',
-    whiteSpace: 'pre-line',
-    lineHeight: 1.7,
+    fontSize: 15, color: '#758696',
+    textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.8,
   },
   errorBanner: {
-    background:    '#2d1515',
-    color:         '#ef5350',
-    padding:       '7px 14px',
-    fontSize:      13,
-    display:       'flex',
-    alignItems:    'center',
-    justifyContent:'space-between',
-    flexShrink:    0,
-    borderBottom:  '1px solid #ef5350',
+    background: '#2d1515', color: '#ef5350', padding: '7px 14px',
+    fontSize: 13, display: 'flex', alignItems: 'center',
+    justifyContent: 'space-between', flexShrink: 0, borderBottom: '1px solid #ef5350',
   },
-  errClose: {
-    background: 'transparent',
-    color:      '#ef5350',
-    border:     'none',
-    fontSize:   16,
-    cursor:     'pointer',
-    padding:    '4px 6px',
-  },
+  errClose: { background: 'transparent', color: '#ef5350', border: 'none', fontSize: 16, cursor: 'pointer', padding: '4px 6px' },
 }

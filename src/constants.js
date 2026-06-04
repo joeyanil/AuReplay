@@ -9,48 +9,39 @@ export const INTERVAL_TO_TD = {
   '1D':  '1day',
 }
 
-// Interval duration in seconds (used for partial candle simulation)
-export const INTERVAL_SECONDS = {
-  '1M':  60,
-  '5M':  300,
-  '15M': 900,
-  '1H':  3600,
-  '4H':  14400,
-  '1D':  86400,
-}
-
-export const SPEED_MS = { 1: 800, 2: 400, 5: 150, 10: 60 }
-export const SPEEDS = [1, 2, 5, 10]
+// ms between candle reveals at each speed — clean full-candle advance like TradingView
+export const SPEED_MS = { 1: 1000, 2: 500, 5: 200, 10: 80 }
+export const SPEEDS   = [1, 2, 5, 10]
 
 export const STARTING_BALANCES = [100, 1000, 5000, 10000, 100000]
 
 export const FIB_LEVELS = [
-  { ratio: 0,     label: '0%',    color: '#9598a1' },
+  { ratio: 0,     label: '0%',    color: '#787b86' },
   { ratio: 0.236, label: '23.6%', color: '#f7525f' },
   { ratio: 0.382, label: '38.2%', color: '#ff9800' },
   { ratio: 0.5,   label: '50%',   color: '#f0b90b' },
   { ratio: 0.618, label: '61.8%', color: '#4caf50' },
   { ratio: 0.786, label: '78.6%', color: '#2196f3' },
-  { ratio: 1,     label: '100%',  color: '#9598a1' },
+  { ratio: 1,     label: '100%',  color: '#787b86' },
 ]
 
 export const DRAWING_TOOLS = [
-  { id: 'none',       label: '↖',   title: 'Pointer' },
+  { id: 'none',       label: '↖',   title: 'Pointer (scroll mode)' },
   { id: 'horizontal', label: '—',   title: 'Horizontal Line' },
   { id: 'trendline',  label: '↗',   title: 'Trendline' },
   { id: 'pricerange', label: '↕',   title: 'Price Range' },
   { id: 'rectangle',  label: '▭',   title: 'Rectangle' },
-  { id: 'fib',        label: 'Fib', title: 'Fibonacci' },
+  { id: 'fib',        label: 'Fib', title: 'Fibonacci Retracement' },
   { id: 'long',       label: '▲',   title: 'Long Position' },
   { id: 'short',      label: '▼',   title: 'Short Position' },
 ]
 
-// Magnet snap radius in pixels for weak mode
-export const WEAK_MAGNET_PX = 20
+// Magnet snap threshold in PRICE UNITS for weak mode (gold ~$0.50 tolerance)
+export const WEAK_MAGNET_THRESHOLD = 0.8
 
+// localStorage keys
 export const LS = {
   CANDLES:        'ar_candles',
-  HISTORY_COUNT:  'ar_history_count',
   INTERVAL:       'ar_interval',
   START_DATE:     'ar_start_date',
   VISIBLE_INDEX:  'ar_visible_index',
@@ -63,16 +54,17 @@ export const LS = {
   MAGNET:         'ar_magnet',
 }
 
+// Unified color palette — TradingView dark theme
 export const C = {
   bg:        '#131722',
   panel:     '#1e222d',
   border:    '#2a2e39',
   input:     '#2a2e39',
   text:      '#d1d4dc',
-  muted:     '#758696',
-  gold:      '#F0B90B',
+  muted:     '#787b86',
+  gold:      '#f0b90b',
   green:     '#26a69a',
   red:       '#ef5350',
-  highlight: '#363a45',
-  ghostCandle: 'rgba(150,150,150,0.15)',
+  highlight: '#2a2e39',
+  activeTab: '#1a1e2b',
 }
