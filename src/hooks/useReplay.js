@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { SPEED_MS } from '../constants.js'
-import { loadSession, switchTimeframe } from '../api/twelvedata.js'
+import { loadSession, switchTimeframe, fetchMoreForward } from '../api/twelvedata.js'
 
 export function useReplay(session) {
   const {
@@ -11,117 +11,107 @@ export function useReplay(session) {
     startDate, setStartDate,
   } = session
 
-  const [isPlaying,    setIsPlaying]   = useState(false)
-  const [speed,        setSpeed]       = useState(1)
-  const [loading,      setLoading]     = useState(false)
-  const [error,        setError]       = useState(null)
-  // Partial candle: { open, high, low, close, progress 0-1 }
-  const [partialCandle, setPartialCandle] = useState(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [speed,     setSpeed]     = useState(1)
+  const [loading,   setLoading]   = useState(false)
+  const [error,     setError]     = useState(null)
+  const [fetching,  setFetching]  = useState(false) // background fetch more
 
-  // Refs for stable timer access
-  const viRef      = useRef(visibleIndex)
-  const lenRef     = useRef(candles.length)
-  const candlesRef = useRef(candles)
-  const timerRef   = useRef(null)
-  const partialRef = useRef(0) // partial tick counter within a candle (0-9)
-  const intervalRef= useRef(interval)
+  // Refs for stable timer closure
+  const viRef       = useRef(visibleIndex)
+  const lenRef      = useRef(candles.length)
+  const candlesRef  = useRef(candles)
+  const intervalRef = useRef(interval)
+  const timerRef    = useRef(null)
+  const fetchingRef = useRef(false)
 
-  useEffect(() => { viRef.current = visibleIndex },    [visibleIndex])
+  useEffect(() => { viRef.current = visibleIndex },          [visibleIndex])
   useEffect(() => { lenRef.current = candles.length;
-                    candlesRef.current = candles },    [candles])
-  useEffect(() => { intervalRef.current = interval }, [interval])
+                    candlesRef.current = candles },          [candles])
+  useEffect(() => { intervalRef.current = interval },       [interval])
 
-  // ── Build a partial candle between prev close and next close ────────────────
-  const buildPartial = useCallback((nextCandle, progress) => {
-    if (!nextCandle) return null
-    // Simulate price moving from open toward close linearly,
-    // with random wick noise like a real chart
-    const { open, high, low, close } = nextCandle
-    const currentClose = open + (close - open) * progress
-    const currentHigh  = open + (high - open)  * Math.min(1, progress * 1.5)
-    const currentLow   = open + (low - open)   * Math.min(1, progress * 1.5)
-    return {
-      time:  nextCandle.time,
-      open,
-      high:  Math.max(open, close, currentHigh, currentClose),
-      low:   Math.min(open, close, currentLow,  currentClose),
-      close: currentClose,
-    }
-  }, [])
+  // ── Auto-fetch more candles when near the end ─────────────────────────────
+  const maybeFetchMore = useCallback(async (vi, cands) => {
+    if (fetchingRef.current) return
+    if (vi < cands.length - 60) return  // still have plenty left
+    const last = cands[cands.length - 1]
+    if (!last) return
+    fetchingRef.current = true
+    setFetching(true)
+    try {
+      const more = await fetchMoreForward(intervalRef.current, last.time)
+      if (more.length > 0) {
+        const updated = [...cands, ...more]
+        candlesRef.current = updated
+        lenRef.current     = updated.length
+        setCandles(updated)
+      }
+    } catch (e) { console.warn('fetchMore failed:', e.message) }
+    finally { fetchingRef.current = false; setFetching(false) }
+  }, [setCandles])
 
-  // ── Timer ──────────────────────────────────────────────────────────────────
+  // ── Timer — clean full-candle advance ─────────────────────────────────────
   const stopTimer = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
   }, [])
 
   const startTimer = useCallback(() => {
     stopTimer()
-    const PARTIAL_TICKS = 8 // sub-steps per candle for partial animation
-    partialRef.current = 0
-
     timerRef.current = setInterval(() => {
       const vi  = viRef.current
       const len = lenRef.current
-
-      // Advance partial candle within the NEXT candle
-      const next = candlesRef.current[vi + 1]
-      if (next) {
-        partialRef.current = (partialRef.current + 1) % PARTIAL_TICKS
-        if (partialRef.current > 0) {
-          setPartialCandle(buildPartial(next, partialRef.current / PARTIAL_TICKS))
-          return // don't advance main index yet
-        }
-      }
-
-      // Advance to next full candle
       if (vi >= len - 1) {
-        stopTimer(); setIsPlaying(false); setPartialCandle(null); return
+        stopTimer(); setIsPlaying(false); return
       }
-      const newVi = vi + 1
-      viRef.current = newVi
-      setVisibleIndex(newVi)
-      setPartialCandle(null)
-      partialRef.current = 0
-    }, SPEED_MS[speed] / 8)
-  }, [speed, stopTimer, setVisibleIndex, buildPartial])
+      const next = vi + 1
+      viRef.current = next
+      setVisibleIndex(next)
+      // Trigger background fetch if getting close to end
+      maybeFetchMore(next, candlesRef.current)
+    }, SPEED_MS[speed])
+  }, [speed, stopTimer, setVisibleIndex, maybeFetchMore])
 
+  // Restart timer on speed change while playing
   useEffect(() => {
     if (isPlaying) startTimer()
     return stopTimer
   }, [speed]) // eslint-disable-line
 
-  // ── Controls ───────────────────────────────────────────────────────────────
+  // ── Public controls ────────────────────────────────────────────────────────
   const play = useCallback(() => {
-    if (!candles.length || viRef.current >= lenRef.current - 1) return
+    if (!candlesRef.current.length) return
+    if (viRef.current >= lenRef.current - 1) return
     setIsPlaying(true)
     startTimer()
-  }, [candles.length, startTimer])
+  }, [startTimer])
 
   const pause = useCallback(() => {
-    stopTimer(); setIsPlaying(false); setPartialCandle(null)
+    stopTimer(); setIsPlaying(false)
   }, [stopTimer])
 
   const stepForward = useCallback(() => {
     pause()
     setVisibleIndex(prev => {
-      const n = Math.min(prev + 1, lenRef.current - 1)
-      viRef.current = n; return n
+      const next = Math.min(prev + 1, lenRef.current - 1)
+      viRef.current = next
+      maybeFetchMore(next, candlesRef.current)
+      return next
     })
-  }, [pause, setVisibleIndex])
+  }, [pause, setVisibleIndex, maybeFetchMore])
 
   const stepBack = useCallback(() => {
     pause()
     setVisibleIndex(prev => {
-      const n = Math.max(prev - 1, replayStartIndex)
-      viRef.current = n; return n
+      const next = Math.max(prev - 1, replayStartIndex)
+      viRef.current = next
+      return next
     })
   }, [pause, setVisibleIndex, replayStartIndex])
 
   const jumpToStart = useCallback(() => {
     pause()
-    const n = replayStartIndex
-    viRef.current = n
-    setVisibleIndex(n)
+    viRef.current = replayStartIndex
+    setVisibleIndex(replayStartIndex)
   }, [pause, setVisibleIndex, replayStartIndex])
 
   const jumpToEnd = useCallback(() => {
@@ -139,47 +129,49 @@ export function useReplay(session) {
       const iv   = newInterval || interval
       const date = newDate     || startDate
       const { candles: data, replayStartIndex: rsi } = await loadSession(iv, date)
+      candlesRef.current  = data
+      lenRef.current      = data.length
       setCandles(data)
-      lenRef.current    = data.length
-      candlesRef.current= data
       setReplayStartIndex(rsi)
-      viRef.current     = rsi
+      viRef.current = rsi
       setVisibleIndex(rsi)
       if (newInterval) { setInterval(newInterval); intervalRef.current = newInterval }
       if (newDate)       setStartDate(newDate)
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
-  }, [pause, interval, startDate, setCandles, setVisibleIndex, setReplayStartIndex, setInterval, setStartDate])
+  }, [pause, interval, startDate,
+      setCandles, setVisibleIndex, setReplayStartIndex,
+      setInterval, setStartDate])
 
-  // ── TF switch — keeps same timestamp ──────────────────────────────────────
+  // ── TF switch — keep same timestamp ───────────────────────────────────────
   const switchInterval = useCallback(async (newInterval) => {
     if (newInterval === intervalRef.current) return
-    if (!candles.length) { setInterval(newInterval); return }
+    if (!candlesRef.current.length) { setInterval(newInterval); intervalRef.current = newInterval; return }
     pause()
     setLoading(true); setError(null)
     try {
-      const currentTs      = candlesRef.current[viRef.current]?.time
-      const replayStartTs  = candlesRef.current[replayStartIndex]?.time
+      const currentTs     = candlesRef.current[viRef.current]?.time
+      const replayStartTs = candlesRef.current[replayStartIndex]?.time
       const { candles: data, replayStartIndex: rsi, newVisibleIndex } =
         await switchTimeframe(newInterval, currentTs, replayStartTs)
+      candlesRef.current = data
+      lenRef.current     = data.length
       setCandles(data)
-      lenRef.current    = data.length
-      candlesRef.current= data
       setReplayStartIndex(rsi)
-      viRef.current     = newVisibleIndex
+      viRef.current = newVisibleIndex
       setVisibleIndex(newVisibleIndex)
       setInterval(newInterval)
       intervalRef.current = newInterval
     } catch (e) { setError(e.message) }
     finally { setLoading(false) }
-  }, [candles.length, replayStartIndex, pause, setCandles, setVisibleIndex, setReplayStartIndex, setInterval])
+  }, [replayStartIndex, pause,
+      setCandles, setVisibleIndex, setReplayStartIndex, setInterval])
 
   useEffect(() => () => stopTimer(), [stopTimer])
 
   return {
     isPlaying, speed, setSpeed,
-    loading, error, setError,
-    partialCandle,
+    loading, error, setError, fetching,
     play, pause, stepForward, stepBack,
     jumpToStart, jumpToEnd,
     load, switchInterval,
