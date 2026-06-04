@@ -3,6 +3,12 @@ import { INTERVAL_TO_TD } from '../constants.js'
 const API_KEY = '1a8f8b605803429a9819e8e541255b68'
 const BASE    = 'https://api.twelvedata.com'
 
+function toDateStr(ts) {
+  const d   = new Date(ts * 1000)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`
+}
+
 async function tdFetch(interval, params) {
   const p = new URLSearchParams({
     symbol:   'XAU/USD',
@@ -17,7 +23,7 @@ async function tdFetch(interval, params) {
   const json = await res.json()
   if (json.status === 'error') throw new Error(`Twelve Data: ${json.message}`)
   if (!Array.isArray(json.values) || !json.values.length)
-    throw new Error('No data returned. Try a different date or interval.')
+    throw new Error('No data for this date/interval. Try a different date.')
   return json.values.map(v => ({
     time:  Math.floor(new Date(v.datetime).getTime() / 1000),
     open:  parseFloat(v.open),
@@ -29,74 +35,45 @@ async function tdFetch(interval, params) {
 
 /**
  * Load a full replay session:
- * 1. Fetch 500 candles BEFORE startDate  → history (all visible, scrollable)
- * 2. Fetch 500 candles FROM  startDate   → replay candles (revealed one by one)
- *
+ *   history  = 500 candles BEFORE startDate  (all visible, scrollable)
+ *   forward  = 500 candles FROM  startDate   (revealed one by one)
  * Returns { candles, replayStartIndex }
- * candles = [...history, ...replayCandlesForward]
- * replayStartIndex = index of the first replay candle
  */
 export async function loadSession(interval, startDate) {
-  // Fetch history before start date (end_date = startDate)
   let history = []
   try {
-    history = await tdFetch(interval, {
-      outputsize: '500',
-      end_date:   startDate,
-    })
-    // Remove the last candle if it exactly equals startDate (avoid duplicate)
-    if (history.length) {
-      const startTs = Math.floor(new Date(startDate).getTime() / 1000)
-      if (history[history.length - 1].time >= startTs) history.pop()
-    }
+    const raw = await tdFetch(interval, { outputsize: '500', end_date: startDate })
+    // Remove any candle at or after startDate to avoid overlap
+    const startTs = Math.floor(new Date(startDate).getTime() / 1000)
+    history = raw.filter(c => c.time < startTs)
   } catch { history = [] }
 
-  // Fetch forward from startDate
-  const forward = await tdFetch(interval, {
-    outputsize: '500',
-    start_date: startDate,
-  })
+  const forward = await tdFetch(interval, { outputsize: '500', start_date: startDate })
 
   const candles          = [...history, ...forward]
-  const replayStartIndex = history.length  // first candle of the replay portion
+  const replayStartIndex = history.length
 
   return { candles, replayStartIndex }
 }
 
 /**
- * Switch timeframe: fetch new candles centred on the current timestamp.
- * Returns { candles, replayStartIndex, newVisibleIndex }
+ * Switch timeframe — keep same timestamp position.
  */
 export async function switchTimeframe(newInterval, currentTimestamp, replayStartTimestamp) {
-  // Convert unix → 'YYYY-MM-DD HH:mm:ss'
-  const fmt = ts => {
-    const d = new Date(ts * 1000)
-    const pad = n => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`
-  }
+  const startDateStr = toDateStr(replayStartTimestamp)
 
-  // Fetch history before replay start
   let history = []
   try {
-    history = await tdFetch(newInterval, {
-      outputsize: '500',
-      end_date:   fmt(replayStartTimestamp),
-    })
-    if (history.length) {
-      if (history[history.length - 1].time >= replayStartTimestamp) history.pop()
-    }
+    const raw = await tdFetch(newInterval, { outputsize: '500', end_date: startDateStr })
+    history = raw.filter(c => c.time < replayStartTimestamp)
   } catch { history = [] }
 
-  // Fetch forward from replay start
-  const forward = await tdFetch(newInterval, {
-    outputsize: '500',
-    start_date: fmt(replayStartTimestamp),
-  })
+  const forward = await tdFetch(newInterval, { outputsize: '500', start_date: startDateStr })
 
   const candles          = [...history, ...forward]
   const replayStartIndex = history.length
 
-  // Find closest candle to currentTimestamp
+  // Find closest visible index to currentTimestamp
   let newVisibleIndex = replayStartIndex
   for (let i = replayStartIndex; i < candles.length; i++) {
     if (candles[i].time <= currentTimestamp) newVisibleIndex = i
@@ -104,4 +81,17 @@ export async function switchTimeframe(newInterval, currentTimestamp, replayStart
   }
 
   return { candles, replayStartIndex, newVisibleIndex }
+}
+
+/**
+ * Fetch more candles forward from the last known timestamp.
+ * Used when replay approaches the end of loaded data.
+ */
+export async function fetchMoreForward(interval, lastTimestamp) {
+  const startDateStr = toDateStr(lastTimestamp + 1)
+  try {
+    const more = await tdFetch(interval, { outputsize: '500', start_date: startDateStr })
+    // Remove the first candle if it duplicates lastTimestamp
+    return more.filter(c => c.time > lastTimestamp)
+  } catch { return [] }
 }
