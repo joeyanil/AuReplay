@@ -4,23 +4,25 @@ import { INTERVALS, SPEEDS, C } from '../constants.js'
 export default function Toolbar({
   interval, onIntervalChange,
   startDate, onStartDateChange,
-  onLoad, loading,
+  onLoad, loading, fetching,
   isPlaying, onPlay, onPause,
   onStepBack, onStepForward,
   onJumpStart, onJumpEnd,
   speed, onSpeedChange,
-  visibleIndex, totalCandles,
+  visibleIndex, totalCandles, replayStartIndex,
   ohlc, currentPrice,
 }) {
-  const canStep = totalCandles > 0 && !loading
-  const pct     = totalCandles > 0 ? ((visibleIndex + 1) / totalCandles) * 100 : 0
+  // Replay progress: how many replay candles have been revealed
+  const replayTotal    = Math.max(0, totalCandles - replayStartIndex)
+  const replayRevealed = Math.max(0, visibleIndex - replayStartIndex + 1)
+  const pct            = replayTotal > 0 ? (replayRevealed / replayTotal) * 100 : 0
+  const canStep        = totalCandles > 0 && !loading
 
   return (
     <div style={s.wrap}>
 
-      {/* ── Row 1: Interval tabs + OHLC bar + Date + Load ── */}
+      {/* ── Row 1: Interval tabs + OHLC + Date + Load ── */}
       <div style={s.row}>
-        {/* Interval tabs */}
         <div style={s.group}>
           {INTERVALS.map(tf => (
             <button
@@ -33,19 +35,18 @@ export default function Toolbar({
           ))}
         </div>
 
-        {/* OHLC bar — shows on hover or current candle */}
+        {/* OHLC bar */}
         {ohlc && (
-          <div style={s.ohlcBar}>
-            <span style={s.ohlcItem}><span style={s.ohlcLabel}>O</span><span style={{ color: ohlc.close >= ohlc.open ? C.green : C.red }}>{ohlc.open?.toFixed(2)}</span></span>
-            <span style={s.ohlcItem}><span style={s.ohlcLabel}>H</span><span style={{ color: C.green }}>{ohlc.high?.toFixed(2)}</span></span>
-            <span style={s.ohlcItem}><span style={s.ohlcLabel}>L</span><span style={{ color: C.red }}>{ohlc.low?.toFixed(2)}</span></span>
-            <span style={s.ohlcItem}><span style={s.ohlcLabel}>C</span><span style={{ color: ohlc.close >= ohlc.open ? C.green : C.red }}>{ohlc.close?.toFixed(2)}</span></span>
+          <div style={s.ohlc}>
+            <OhlcItem label="O" value={ohlc.open}  color={ohlc.close >= ohlc.open ? C.green : C.red} />
+            <OhlcItem label="H" value={ohlc.high}  color={C.green} />
+            <OhlcItem label="L" value={ohlc.low}   color={C.red} />
+            <OhlcItem label="C" value={ohlc.close} color={ohlc.close >= ohlc.open ? C.green : C.red} />
           </div>
         )}
 
         <div style={{ flex: 1 }} />
 
-        {/* Date picker + Load */}
         <input
           type="date"
           value={startDate}
@@ -61,29 +62,21 @@ export default function Toolbar({
         </button>
       </div>
 
-      {/* ── Row 2: Playback + speed + progress ── */}
+      {/* ── Row 2: Playback + Speed + Price + Counter ── */}
       <div style={s.row}>
-        {/* Jump to start */}
-        <button onClick={onJumpStart} disabled={!canStep} style={s.ctrlBtn} title="Jump to start">⏮</button>
+        <button onClick={onJumpStart}    disabled={!canStep} style={s.ctrlBtn} title="Jump to start">⏮</button>
+        <button onClick={onStepBack}     disabled={!canStep || visibleIndex <= replayStartIndex} style={s.ctrlBtn} title="Step back">◀</button>
 
-        {/* Step back */}
-        <button onClick={onStepBack} disabled={!canStep || visibleIndex <= 0} style={s.ctrlBtn} title="Step back">◀</button>
-
-        {/* Play / Pause */}
         {isPlaying
           ? <button onClick={onPause} style={{ ...s.ctrlBtn, ...s.playBtn }}>⏸</button>
           : <button onClick={onPlay}  disabled={!canStep} style={{ ...s.ctrlBtn, ...s.playBtn }}>▶</button>
         }
 
-        {/* Step forward */}
-        <button onClick={onStepForward} disabled={!canStep || visibleIndex >= totalCandles - 1} style={s.ctrlBtn} title="Step forward">▶</button>
-
-        {/* Jump to end */}
-        <button onClick={onJumpEnd} disabled={!canStep} style={s.ctrlBtn} title="Jump to end">⏭</button>
+        <button onClick={onStepForward}  disabled={!canStep || visibleIndex >= totalCandles - 1} style={s.ctrlBtn} title="Step forward">▶</button>
+        <button onClick={onJumpEnd}      disabled={!canStep} style={s.ctrlBtn} title="Jump to end">⏭</button>
 
         <div style={s.divider} />
 
-        {/* Speed */}
         <div style={s.group}>
           {SPEEDS.map(sp => (
             <button
@@ -98,77 +91,77 @@ export default function Toolbar({
 
         <div style={s.divider} />
 
-        {/* Current price */}
+        {/* Live price */}
         {currentPrice != null && (
           <span style={s.livePrice}>{currentPrice.toFixed(2)}</span>
         )}
 
-        {/* Candle counter */}
-        {totalCandles > 0 && (
-          <span style={s.counter}>{visibleIndex + 1} / {totalCandles}</span>
+        {/* Replay candle counter — shows replay progress not total */}
+        {replayTotal > 0 && (
+          <span style={s.counter}>
+            {replayRevealed}/{replayTotal}
+            {fetching && <span style={{ color: C.gold, marginLeft: 4 }}>…</span>}
+          </span>
         )}
       </div>
 
-      {/* ── Progress bar ── */}
-      {totalCandles > 0 && (
-        <div style={s.progressTrack}>
-          <div style={{ ...s.progressFill, width: `${pct}%` }} />
-        </div>
-      )}
+      {/* ── Progress bar — replay progress only ── */}
+      <div style={s.progressTrack}>
+        <div style={{ ...s.progressFill, width: `${pct}%` }} />
+      </div>
     </div>
+  )
+}
+
+function OhlcItem({ label, value, color }) {
+  return (
+    <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      <span style={{ color: C.muted, fontSize: 10 }}>{label}</span>
+      <span style={{ color, fontSize: 11, fontFamily: 'monospace', fontWeight: 600 }}>
+        {value?.toFixed(2)}
+      </span>
+    </span>
   )
 }
 
 const s = {
   wrap: {
-    background:   C.panel,
-    borderBottom: `1px solid ${C.border}`,
-    padding:      '5px 8px 0',
-    display:      'flex',
-    flexDirection:'column',
-    gap:          5,
-    flexShrink:   0,
+    background:    C.panel,
+    borderBottom:  `1px solid ${C.border}`,
+    padding:       '5px 8px 0',
+    display:       'flex',
+    flexDirection: 'column',
+    gap:           5,
+    flexShrink:    0,
   },
   row: {
     display:    'flex',
     alignItems: 'center',
     gap:        4,
-    flexWrap:   'nowrap',
     overflow:   'hidden',
   },
-  group: {
-    display: 'flex',
-    gap:     2,
-  },
+  group: { display: 'flex', gap: 2 },
   tfBtn: {
-    background:  C.input,
-    color:       C.muted,
-    border:      `1px solid ${C.border}`,
+    background:   C.input,
+    color:        C.muted,
+    border:       `1px solid ${C.border}`,
     borderRadius: 4,
-    padding:     '4px 7px',
-    fontSize:    11,
-    fontWeight:  600,
-    minHeight:   30,
-    cursor:      'pointer',
+    padding:      '4px 7px',
+    fontSize:     11,
+    fontWeight:   600,
+    minHeight:    30,
+    cursor:       'pointer',
   },
   tfActive: {
-    background:  C.highlight,
+    background:  '#1a1e2b',
     color:       C.gold,
     borderColor: C.gold,
   },
-  ohlcBar: {
+  ohlc: {
     display:    'flex',
     gap:        8,
-    fontSize:   11,
-    fontFamily: 'monospace',
-    marginLeft: 6,
-  },
-  ohlcItem: {
-    display: 'flex',
-    gap:     3,
-  },
-  ohlcLabel: {
-    color: C.muted,
+    marginLeft: 8,
+    flexShrink: 0,
   },
   dateInput: {
     background:  C.input,
@@ -183,34 +176,34 @@ const s = {
     flexShrink:  0,
   },
   loadBtn: {
-    background:  C.gold,
-    color:       C.bg,
-    border:      'none',
+    background:   C.gold,
+    color:        C.bg,
+    border:       'none',
     borderRadius: 4,
-    padding:     '4px 14px',
-    fontSize:    13,
-    fontWeight:  700,
-    minHeight:   30,
-    cursor:      'pointer',
-    flexShrink:  0,
+    padding:      '4px 14px',
+    fontSize:     13,
+    fontWeight:   700,
+    minHeight:    30,
+    cursor:       'pointer',
+    flexShrink:   0,
   },
   ctrlBtn: {
-    background:  C.input,
-    color:       C.text,
-    border:      `1px solid ${C.border}`,
-    borderRadius: 4,
-    padding:     '5px 10px',
-    fontSize:    15,
-    minHeight:   34,
-    minWidth:    34,
-    cursor:      'pointer',
-    display:     'flex',
-    alignItems:  'center',
+    background:     C.input,
+    color:          C.text,
+    border:         `1px solid ${C.border}`,
+    borderRadius:   4,
+    padding:        '4px 10px',
+    fontSize:       15,
+    minHeight:      34,
+    minWidth:       34,
+    cursor:         'pointer',
+    display:        'flex',
+    alignItems:     'center',
     justifyContent: 'center',
-    flexShrink:  0,
+    flexShrink:     0,
   },
   playBtn: {
-    background: C.highlight,
+    background: '#2a2e39',
     minWidth:   46,
     fontSize:   18,
   },
@@ -222,18 +215,18 @@ const s = {
     margin:     '0 2px',
   },
   speedBtn: {
-    background:  C.input,
-    color:       C.muted,
-    border:      `1px solid ${C.border}`,
+    background:   C.input,
+    color:        C.muted,
+    border:       `1px solid ${C.border}`,
     borderRadius: 4,
-    padding:     '4px 8px',
-    fontSize:    11,
-    fontWeight:  600,
-    minHeight:   30,
-    cursor:      'pointer',
+    padding:      '4px 8px',
+    fontSize:     11,
+    fontWeight:   600,
+    minHeight:    30,
+    cursor:       'pointer',
   },
   speedActive: {
-    background:  C.highlight,
+    background:  '#1a1e2b',
     color:       C.gold,
     borderColor: C.gold,
   },
@@ -242,25 +235,25 @@ const s = {
     fontWeight: 700,
     color:      C.gold,
     fontFamily: 'monospace',
-    marginLeft: 2,
+    flexShrink: 0,
   },
   counter: {
     fontSize:  11,
     color:     C.muted,
-    marginLeft:'auto',
+    marginLeft: 'auto',
     flexShrink: 0,
   },
   progressTrack: {
-    height:     2,
-    background: C.border,
+    height:       2,
+    background:   C.border,
     borderRadius: 1,
-    overflow:   'hidden',
-    marginTop:  2,
+    overflow:     'hidden',
+    marginTop:    2,
   },
   progressFill: {
     height:     '100%',
     background: C.gold,
     borderRadius: 1,
-    transition: 'width 0.1s linear',
+    transition: 'width 0.12s linear',
   },
 }
