@@ -28,7 +28,7 @@ export async function dbSaveStats(stats, startingBalance) {
     biggest_win:      stats.biggestWin,
     biggest_loss:     stats.biggestLoss,
     max_drawdown:     stats.maxDrawdown,
-    profit_factor:    stats.profitFactor,
+    profit_factor:    isFinite(stats.profitFactor) ? stats.profitFactor : 999,
     starting_balance: startingBalance,
     updated_at:       new Date().toISOString(),
   }])
