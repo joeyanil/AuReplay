@@ -30,7 +30,7 @@ input, select {
 }
 
 input:focus, select:focus {
-  border-color: #F0B90B !important;
+  border-color: #f0b90b !important;
   box-shadow: 0 0 0 1px rgba(240,185,11,0.15);
 }
 
@@ -41,3 +41,8 @@ input:focus, select:focus {
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
 input[type=number] { -moz-appearance: textfield; }
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
